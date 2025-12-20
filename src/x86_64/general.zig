@@ -5,6 +5,7 @@ const gdt = @import("tables/globalDescriptorTable.zig");
 const idt = @import("tables/interruptDescriptorTable.zig");
 const pmm = @import("mem/pmm.zig");
 const pic = @import("hardware/pic.zig");
+const acpi = @import("hardware/acpi/acpi.zig");
 const ports = @import("io/ports.zig");
 const cpuid = @import("asm/cpuid.zig");
 
@@ -31,6 +32,9 @@ pub fn pre_init() !void {
 pub fn post_init() !void {
     log.debug("Setting up Programable Interrupt Controller...", .{});
     pic.setup();
+
+    log.debug("Setting up APIC...", .{});
+    try acpi.init();
 
     log.debug("Setting up Programable Interval Timer...", .{});
     setup_timer_interval();
