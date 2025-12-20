@@ -24,18 +24,21 @@ pub const PagingFeatures = struct {
     five_level_paging: bool,
     gigabyte_pages: bool,
     global_page_support: bool,
+    execute_disable: bool,
 };
 pub fn enumerate_paging_features() void {
     const addresses = assemlby.cpuid.cpuid(.extended_address_info, {}).address_size_info;
     const feats_base = assemlby.cpuid.cpuid(.type_fam_model_stepping_features, {});
     const feats_ext = assemlby.cpuid.cpuid(.extended_fam_model_stepping_features, {});
     const flags = assemlby.cpuid.cpuid(.feature_flags, {});
+
     features = PagingFeatures{
         .maxphyaddr = addresses.physical_address_bits,
         .linear_address_width = addresses.virtual_address_bits,
         .five_level_paging = flags.flags2.la57,
         .gigabyte_pages = feats_ext.features2.pg1g,
         .global_page_support = feats_base.features.pge,
+        .execute_disable = feats_ext.features2.nx,
     };
 }
 
@@ -135,7 +138,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
         entry.access = if (attributes.write) .read_write else .read_only;
         entry.privilege = if (attributes.privileged or split.pml4 >= 0) .kernel else .user;
         entry.cache_mode = .write_back;
-        entry.no_code = !attributes.execute;
+        entry.no_code = features.execute_disable and !attributes.execute;
 
         entry.set_phys_addr(phys_base);
         entry.is_gb_page = true;
@@ -172,7 +175,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
 
         entry.* = @bitCast(@as(usize, 0));
         entry.access = if (attributes.write) .read_write else .read_only;
-        entry.no_code = !attributes.execute;
+        entry.no_code = features.execute_disable and !attributes.execute;
         entry.privilege = if (attributes.privileged or split.pml4 >= 0) .kernel else .user;
         entry.is_mb_page = true;
         entry.set_phys_addr(phys_base);
@@ -201,26 +204,27 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
 
         entry.* = @bitCast(@as(usize, 0));
         entry.access = if (attributes.write) .read_write else .read_only;
-        entry.no_code = !attributes.execute;
+        entry.no_code = features.execute_disable and !attributes.execute;
         entry.privilege = if (attributes.privileged or split.pml4 >= 0) .kernel else .user;
         entry.set_phys_addr(phys_base);
         entry.present = true;
     }
+
+    invlpg(virt_base);
 }
 pub fn map_range(phys_base: usize, virt_base: usize, length: usize, attributes: Attributes) MMapError!void {
-
-    // log.debug("mapping range ${X}..${X} -> ${X}..${X} ({s}{s}{s}{s}{s}{s})",
-    // .{
-    //     phys_base, phys_base + length,
-    //     virt_base, virt_base + length,
-
-    //     if (attributes.read) "R" else "-",
-    //     if (attributes.write) "W" else "-",
-    //     if (attributes.execute) "X" else "-",
-    //     if (attributes.privileged) "P" else "-",
-    //     if (attributes.disable_cache) "-" else "C",
-    //     if (attributes.lock) "L" else "-"
-    // });
+    log.debug("mapping range ${X}..${X} -> ${X}..${X} ({s}{s}{s}{s}{s}{s})", .{
+        phys_base,
+        phys_base + length,
+        virt_base,
+        virt_base + length,
+        if (attributes.read) "R" else "-",
+        if (attributes.write) "W" else "-",
+        if (attributes.execute) "X" else "-",
+        if (attributes.privileged) "P" else "-",
+        if (attributes.disable_cache) "-" else "C",
+        if (attributes.lock) "L" else "-",
+    });
 
     var pa = phys_base;
     var la = virt_base;
@@ -263,6 +267,13 @@ fn create_page_table(comptime T: type, entry: anytype) !Table(T) {
     const ptr: Table(T) = @ptrCast(@alignCast(tbl));
     @memset(std.mem.asBytes(ptr), 0);
     return ptr;
+}
+
+inline fn invlpg(addr: usize) void {
+    asm volatile ("invlpg (%[addr])"
+        :
+        : [addr] "R" (addr),
+        : .{ .memory = true });
 }
 
 pub fn phys_from_ptr(ptr: anytype) ?usize {
@@ -357,8 +368,8 @@ const PML45 = packed struct(u64) {
     _reserved_0: u1 = 0,
     _available_1: u4,
     physaddr: u40,
-    _reserved_1: u7,
-    _reserved_2: u4,
+    _reserved_1: u7 = 0,
+    _reserved_2: u4 = 0,
     no_code: bool,
 
     const physaddr_mask = makeTruncMask(@This(), "physaddr");

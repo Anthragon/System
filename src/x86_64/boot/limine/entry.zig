@@ -17,35 +17,40 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
 
     // Tiny subroutine to make sure some main
     // CPU extra features are enabled
-    switch (arch) {
-        .x86_64 => {
-            // Forcefully active common CPU features
-            var cr0: usize = 0;
-            var cr4: usize = 0;
 
-            asm volatile ("mov %%cr0, %[out]"
-                : [out] "=r" (cr0),
-            );
-            cr0 &= ~@as(usize, 1 << 2); // EM = 0
-            cr0 |= @as(usize, 1 << 1); // MP = 1
-            asm volatile ("mov %[in], %%cr0"
-                :
-                : [in] "r" (cr0),
-            );
+    // Forcefully active common CPU features
+    var cr0: usize = 0;
+    var cr4: usize = 0;
 
-            asm volatile ("mov %%cr4, %[out]"
-                : [out] "=r" (cr4),
-            );
-            cr4 |= @as(usize, 1 << 9); // OSFXSR
-            cr4 |= @as(usize, 1 << 10); // OSXMMEXCPT
-            asm volatile ("mov %[in], %%cr4"
-                :
-                : [in] "r" (cr4),
-            );
+    asm volatile ("mov %%cr0, %[out]"
+        : [out] "=r" (cr0),
+    );
+    cr0 &= ~@as(usize, 1 << 2); // EM = 0
+    cr0 |= @as(usize, 1 << 1); // MP = 1
+    asm volatile ("mov %[in], %%cr0"
+        :
+        : [in] "r" (cr0),
+    );
 
-            asm volatile ("fninit");
-        },
-        else => {},
+    asm volatile ("mov %%cr4, %[out]"
+        : [out] "=r" (cr4),
+    );
+    cr4 |= @as(usize, 1 << 9); // OSFXSR
+    cr4 |= @as(usize, 1 << 10); // OSXMMEXCPT
+    asm volatile ("mov %[in], %%cr4"
+        :
+        : [in] "r" (cr4),
+    );
+
+    asm volatile ("fninit");
+
+    if (check_nx_support()) {
+        asm volatile (
+            \\movl $0xC0000080, %%ecx
+            \\rdmsr
+            \\orl $(1 << 11), %%eax
+            \\wrmsr
+            ::: .{ .rax = true, .rcx = true, .rdx = true });
     }
 
     if (!base_revision.is_supported()) done();
@@ -104,6 +109,45 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
     unreachable;
 }
 
+const cpuid = struct {
+    pub const CpuIdResult = struct {
+        eax: u32,
+        ebx: u32,
+        ecx: u32,
+        edx: u32,
+    };
+
+    /// Executa a instrução CPUID.
+    /// leaf: O valor em EAX (função principal)
+    /// subleaf: O valor em ECX (geralmente 0)
+    pub fn exec(leaf: u32, subleaf: u32) CpuIdResult {
+        var eax: u32 = undefined;
+        var ebx: u32 = undefined;
+        var ecx: u32 = undefined;
+        var edx: u32 = undefined;
+
+        asm volatile ("cpuid"
+            : [eax] "={eax}" (eax),
+              [ebx] "={ebx}" (ebx),
+              [ecx] "={ecx}" (ecx),
+              [edx] "={edx}" (edx),
+            : [leaf] "{eax}" (leaf),
+              [subleaf] "{ecx}" (subleaf),
+            : .{ .memory = true });
+
+        return .{
+            .eax = eax,
+            .ebx = ebx,
+            .ecx = ecx,
+            .edx = edx,
+        };
+    }
+};
+
+fn check_nx_support() bool {
+    const res = cpuid.exec(0x80000001, 0);
+    return (res.edx & (1 << 20)) != 0;
+}
 fn done() noreturn {
     // Error here, the CPU is hard resetted
     // after tripple falt
