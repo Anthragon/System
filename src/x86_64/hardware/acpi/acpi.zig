@@ -81,7 +81,20 @@ fn decode_madt(table: *const acpi_tables.Sdt) void {
                 log.debug("\t  GSIB:      0x{x:0>8}", .{int_base});
             },
 
-            else => log.err("Unhandled entry type {}", .{entry_type}),
+            2 => {
+                const bus_source = entry[2];
+                const irq_source = entry[3];
+                const global_system_interrupt = std.mem.readInt(u32, entry[4..8], endian);
+                const flags = std.mem.readInt(u16, entry[8..10], endian);
+
+                log.debug("\t2 - IO APIC Interrupt Source Override:", .{});
+                log.debug("\t  BUS source: 0x{x:0>2}", .{bus_source});
+                log.debug("\t  IRQ source: 0x{x:0>2}", .{irq_source});
+                log.debug("\t  GSI:        0x{x:0>8}", .{global_system_interrupt});
+                log.debug("\t  flags:      0x{x:0>4}", .{flags});
+            },
+
+            else => log.debug("Unhandled entry type {}", .{entry_type}),
         }
 
         basei += entry_size;
