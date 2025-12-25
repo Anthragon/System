@@ -116,6 +116,17 @@ pub const TaskContext = extern struct {
         };
     }
 
+    pub fn set_ret(s: @This(), value: usize) void {
+        s.rax = value;
+    }
+    pub fn get_ret(s: @This()) usize {
+        return s.rax;
+    }
+
+    pub fn get_syscall_vector(s: *@This()) usize {
+        return s.rax;
+    }
+
     pub inline fn get_return(s: *@This()) usize {
         return s.rax;
     }
