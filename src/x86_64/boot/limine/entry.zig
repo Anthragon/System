@@ -77,13 +77,17 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
         : .{});
 
     const kfile = kfile_request.response.?.kernel_file;
+
+    var boot_device_tag: boot.BootDeviceTag = undefined;
     const boot_device: boot.BootDevice = b: {
         if (kfile.mbr_disk_id != 0) {
+            boot_device_tag = .mbr;
             break :b .{ .mbr = .{
                 .disk_id = kfile.mbr_disk_id,
                 .partition_index = kfile.partition_index,
             } };
         } else {
+            boot_device_tag = .gpt;
             break :b .{ .gpt = .{
                 .disk_uuid = @bitCast(kfile.gpt_disk_uuid),
                 .part_uuid = @bitCast(kfile.gpt_part_uuid),
@@ -98,14 +102,23 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
         .hhdm_base_offset = hhdm.offset,
         .rsdp_physical = @intFromPtr(rsdp.address),
 
-        .framebuffer = .{ .framebuffer = fbuffer.address[0..fbuffer_size], .width = fbuffer.width, .height = fbuffer.height, .pps = fbuffer.pitch },
+        .framebuffer = .{
+            .framebuffer = fbuffer.address,
+            .buffer_length = fbuffer_size,
+            .width = fbuffer.width,
+            .height = fbuffer.height,
+            .pps = fbuffer.pitch,
+        },
 
-        .memory_map = @ptrCast(mmap.entries_ptr[0..mmap.entry_count]),
+        .memory_map = mmap.entries_ptr,
+        .memory_map_len = mmap.entry_count,
 
+        .boot_device_tag = boot_device_tag,
         .boot_device = boot_device,
     };
 
-    @import("root").main(boot_info);
+    const main = @extern(*const fn (boot.BootInfo) callconv(.c) noreturn, .{ .name = "main" });
+    main(boot_info);
     unreachable;
 }
 

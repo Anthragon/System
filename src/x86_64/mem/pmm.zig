@@ -46,7 +46,7 @@ pub fn setup() void {
 
     const boot_info = root.get_boot_info();
     hhdm_offset = boot_info.hhdm_base_offset;
-    const mmap = boot_info.memory_map;
+    const mmap = boot_info.memory_map[0..boot_info.memory_map_len];
 
     for (mmap) |i| {
         if (i.type == .usable) {
