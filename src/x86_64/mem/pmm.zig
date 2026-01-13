@@ -1,5 +1,6 @@
-const root = @import("root");
 const std = @import("std");
+const root = @import("root");
+const lib = root.lib;
 const debug = root.debug;
 
 const log = std.log.scoped(.@"x86_64 PMM");
@@ -22,7 +23,7 @@ pub var kernel_virt_end: usize = undefined;
 
 pub const page_size = 4096;
 
-pub const atributes_ROX_privileged_fixed = root.mem.paging.Attributes{
+pub const atributes_ROX_privileged_fixed = lib.paging.Attributes{
     .privileged = true,
 
     .read = true,
@@ -101,7 +102,7 @@ pub fn setup() void {
     paging.enumerate_paging_features();
 
     // Generating the definitive memory map
-    _ = paging.create_new_map();
+    const bspmap = paging.create_new_map();
 
     const phys_mapping_range_bits = @min(paging.features.maxphyaddr, 39);
 
@@ -120,15 +121,15 @@ pub fn setup() void {
     // Creating identity map
     const idmap_len = std.math.shl(usize, 1, phys_mapping_range_bits);
     log.debug("\nMarking identity map {x}..{x}...", .{ hhdm_offset, hhdm_offset + idmap_len });
-    paging.map_range(0, hhdm_offset, idmap_len, atributes_ROX_privileged_fixed) catch unreachable;
+    paging.map_range(bspmap, 0, hhdm_offset, idmap_len, atributes_ROX_privileged_fixed) catch unreachable;
 
     // Mapping kernel
     log.debug("Marking kernel...", .{});
     log.debug("\nmapping kernel range {x} .. {x} ({} pages) to {x}..{x}", .{ kernel_phys, kernel_phys + kernel_len, kernel_len / page_size, kernel_virt_start, kernel_virt_end });
-    paging.map_range(kernel_phys, kernel_virt_start, kernel_len, atributes_ROX_privileged_fixed) catch unreachable;
+    paging.map_range(bspmap, kernel_phys, kernel_virt_start, kernel_len, atributes_ROX_privileged_fixed) catch unreachable;
 
     log.debug("Commiting new map to CR3...", .{});
-    paging.commit_map();
+    paging.commit_map(bspmap);
 
     log.info("\nOk theorically we are in our owm mem map now...", .{});
     log.info("Nothing exploded yay :3...", .{});
@@ -351,4 +352,4 @@ const Block = extern struct {
     next: ?*Block,
 };
 
-const BlockStatus = root.mem.paging.MemStatus;
+const BlockStatus = lib.paging.MemStatus;

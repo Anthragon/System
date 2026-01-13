@@ -1,21 +1,21 @@
 // TODO implement level-5 page mapping (99% unecessary)
 const std = @import("std");
 const root = @import("root");
+const lib = root.lib;
 const debug = root.debug;
-const paging = root.mem.paging;
 const pmm = @import("pmm.zig");
 const assemlby = @import("../asm/asm.zig");
 
 const log = std.log.scoped(.@"x86_64 paging");
 
-const MemoryMap = paging.MemoryMap;
-const Attributes = paging.Attributes;
-const MMapError = paging.MMapError;
+const Attributes = lib.paging.Attributes;
+const MMapError = lib.paging.MMapErrorInterop;
 
 const ctrl_regs = assemlby.ctrl_regs;
 const Cr3Value = ctrl_regs.ControlRegisterValueType(.cr3);
 
-var current_map: ?MapPtr = undefined;
+var currentMap: MapPtr = undefined;
+var mapModel: ?MapPtr = null;
 
 pub var features: PagingFeatures = undefined;
 pub const PagingFeatures = struct {
@@ -42,27 +42,29 @@ pub fn enumerate_paging_features() void {
     };
 }
 
-// Returns the current selected memory map
-pub fn get_current_map() MemoryMap {
-    return current_map;
+// Returns the cached active memory map
+pub fn get_current_map() MapPtr {
+    return currentMap;
 }
-// Sets the current selected memory map
-pub fn set_current_map(map: MapPtr) void {
-    current_map = map;
-}
+
 // Loads the currently active memory map
-pub fn load_commited_map() void {
+pub fn load_commited_map() MapPtr {
     var cr3_val: Cr3Value = ctrl_regs.read(.cr3);
     const phys = cr3_val.get_phys_addr();
-    current_map = pmm.ptrFromPhys(Table(PML45), phys);
-    log.info("Loaded commited page table 0x{X} ({X})", .{ phys, @intFromPtr(current_map) });
+    currentMap = pmm.ptrFromPhys(Table(PML45), phys);
+    log.info("Loaded commited page table 0x{X} ({X})", .{ phys, @intFromPtr(currentMap) });
+    return currentMap;
 }
 // Active the currently loaded memory map
-pub fn commit_map() void {
+pub fn commit_map(map: MapPtr) void {
     var cr3_val: Cr3Value = ctrl_regs.read(.cr3);
-    cr3_val.set_phys_addr(pmm.physFromPtr(current_map.?));
+    cr3_val.set_phys_addr(pmm.physFromPtr(map));
     ctrl_regs.write(.cr3, cr3_val);
-    log.debug("Comitted page table at 0x{X} ({X})", .{ cr3_val.get_phys_addr(), @as(usize, @truncate(pmm.physFromPtr(current_map.?) >> 12)) });
+    currentMap = map;
+    log.debug(
+        "Comitted page table at 0x{X} ({X})",
+        .{ cr3_val.get_phys_addr(), @as(usize, @truncate(pmm.physFromPtr(map) >> 12)) },
+    );
 }
 
 // Creates a new empty memory map
@@ -70,19 +72,40 @@ pub fn create_new_map() MapPtr {
     const new_page_phys = pmm.get_single_page(.mem_page);
     var mmap: Table(PML45) = @ptrCast(@alignCast(new_page_phys));
 
-    for (0..mmap.len) |i| mmap[i] = @bitCast(@as(usize, 0));
+    // Lower half clanup
+    for (0..256) |i| mmap[i] = @bitCast(@as(u64, 0));
+
+    if (mapModel) |kmap| {
+        // If map model is created, copy HH
+        for (256..512) |i| mmap[i] = kmap[i];
+    } else {
+        // If no map model, creates it and maps 1 level of the entire HH
+        for (256..512) |i| {
+            const page_dir: Table(PDPTE) = @ptrCast(@alignCast(pmm.get_single_page(.mem_page)));
+
+            const entry: *PML45 = &mmap[i];
+            entry.* = @bitCast(@as(usize, 0));
+            entry.access = .read_write;
+            entry.privilege = .kernel;
+            entry.cache_mode = .write_back;
+            entry.no_code = false;
+            entry.present = true;
+
+            entry.set_phys_addr(pmm.physFromPtr(page_dir));
+        }
+        mapModel = mmap;
+    }
 
     log.debug("Map created at address {X}", .{@intFromPtr(mmap)});
-    current_map = mmap;
     return mmap;
 }
 
 // Debug prints the selected memory map (lots of logs)
-pub fn lsmemmap() void {
+pub fn lsmemmap(map: MapPtr) void {
     log.warn("lsmemmap", .{});
-    log.info("lsmemmap ({X}):", .{pmm.physFromPtr(current_map.?)});
+    log.info("lsmemmap ({X}):", .{pmm.physFromPtr(map)});
 
-    for (current_map.?, 0..) |*cmap, i| if (cmap.present) {
+    for (map, 0..) |*cmap, i| if (cmap.present) {
         log.info("PML4E {: >3} - {s11}{x:0>12} - {}", .{ i, if (i < 256) "0000" else "ffff", i << 39, cmap });
 
         const page_dir_ptr: Table(PDPTE) = pmm.ptrFromPhys(Table(PDPTE), cmap.get_phys_addr());
@@ -104,14 +127,14 @@ pub fn lsmemmap() void {
     };
 }
 
-pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize, attributes: Attributes) MMapError!void {
+pub fn map_single_page(map: MapPtr, phys_base: usize, virt_base: usize, comptime size: usize, attributes: Attributes) !void {
     if (size != 10 and size != 20 and size != 30) @compileError(std.fmt.comptimePrint("Invalid size {} for x86_64 paging!", .{size}));
 
     const split: SplitPagingAddr = @bitCast(virt_base);
 
     const pml4: Table(PML45) = b: {
         if (split.pml4 != 0 and split.pml4 != -1) std.debug.panic("Cannot map address {f} without 5-level paging!", .{split});
-        break :b current_map orelse @panic("No current map!");
+        break :b map;
     };
 
     const page_dir: Table(PDPTE) = b: {
@@ -132,7 +155,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
     if (features.gigabyte_pages and size == 30) { // 1GB pages requested and supported
 
         var entry: *PDPTE = &page_dir[split.directory];
-        if (entry.present) return MMapError.AddressAlreadyMapped;
+        if (entry.present) return error.AddressAlreadyMapped;
 
         entry.* = @bitCast(@as(usize, 0));
         entry.access = if (attributes.write) .read_write else .read_only;
@@ -149,7 +172,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
         for (0..512) |table| {
             const new_v_addr = virt_base + (table << 21);
             const new_p_addr = phys_base + (table << 21);
-            try map_single_page(new_p_addr, new_v_addr, 20, attributes);
+            try map_single_page(map, new_p_addr, new_v_addr, 20, attributes);
         }
         return;
     }
@@ -171,7 +194,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
 
     if (size == 20) {
         var entry: *PDE = &directory[split.table];
-        if (entry.present) return MMapError.AddressAlreadyMapped;
+        if (entry.present) return error.AddressAlreadyMapped;
 
         entry.* = @bitCast(@as(usize, 0));
         entry.access = if (attributes.write) .read_write else .read_only;
@@ -200,7 +223,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
 
     {
         var entry: *PTE = &table[split.page];
-        if (entry.present) return MMapError.AddressAlreadyMapped;
+        if (entry.present) return error.AddressAlreadyMapped;
 
         entry.* = @bitCast(@as(usize, 0));
         entry.access = if (attributes.write) .read_write else .read_only;
@@ -212,7 +235,7 @@ pub fn map_single_page(phys_base: usize, virt_base: usize, comptime size: usize,
 
     invlpg(virt_base);
 }
-pub fn map_range(phys_base: usize, virt_base: usize, length: usize, attributes: Attributes) MMapError!void {
+pub fn map_range(map: MapPtr, phys_base: usize, virt_base: usize, length: usize, attributes: Attributes) !void {
     log.debug("mapping range ${X}..${X} -> ${X}..${X} ({s}{s}{s}{s}{s}{s})", .{
         phys_base,
         phys_base + length,
@@ -231,21 +254,21 @@ pub fn map_range(phys_base: usize, virt_base: usize, length: usize, attributes: 
     var sz = length;
 
     if (!std.mem.isAlignedLog2(pa, 12) or !std.mem.isAlignedLog2(@bitCast(la), 12) or !std.mem.isAlignedLog2(sz, 12))
-        return MMapError.Missaligned;
+        return error.Missaligned;
 
     while (sz > 0) {
         if (std.mem.isAlignedLog2(pa, 30) and std.mem.isAlignedLog2(@bitCast(la), 30) and std.mem.isAlignedLog2(sz, 30) and sz >= 1 << 30) {
-            try map_single_page(pa, la, 30, attributes);
+            try map_single_page(map, pa, la, 30, attributes);
             sz -= 1 << 30;
             pa += 1 << 30;
             la += 1 << 30;
         } else if (std.mem.isAlignedLog2(pa, 21) and std.mem.isAlignedLog2(@bitCast(la), 21) and std.mem.isAlignedLog2(sz, 21) and sz >= 1 << 21) {
-            try map_single_page(pa, la, 20, attributes);
+            try map_single_page(map, pa, la, 20, attributes);
             sz -= 1 << 21;
             pa += 1 << 21;
             la += 1 << 21;
         } else if (sz >= 1 << 12) {
-            try map_single_page(pa, la, 10, attributes);
+            try map_single_page(map, pa, la, 10, attributes);
             sz -= 1 << 12;
             pa += 1 << 12;
             la += 1 << 12;
@@ -253,10 +276,12 @@ pub fn map_range(phys_base: usize, virt_base: usize, length: usize, attributes: 
     }
 }
 
-pub fn unmap_single_page(virt_base: usize) MMapError!void {
+pub fn unmap_single_page(map: MapPtr, virt_base: usize) !void {
+    _ = map;
     _ = virt_base;
 }
-pub fn unmap_range(virt_base: usize, length: usize) MMapError!void {
+pub fn unmap_range(map: MapPtr, virt_base: usize, length: usize) !void {
+    _ = map;
     _ = virt_base;
     _ = length;
 }
@@ -276,13 +301,13 @@ inline fn invlpg(addr: usize) void {
         : .{ .memory = true });
 }
 
-pub fn phys_from_ptr(ptr: anytype) ?usize {
-    return phys_from_virt(@intFromPtr(ptr));
+pub fn phys_from_ptr(map: MapPtr, ptr: anytype) ?usize {
+    return phys_from_virt(map, @intFromPtr(ptr));
 }
-pub fn phys_from_virt(vaddr: usize) ?usize {
+pub fn phys_from_virt(map: MapPtr, vaddr: usize) ?usize {
     const split: SplitPagingAddr = @bitCast(vaddr);
 
-    var pml4: Table(PML45) = current_map orelse return null;
+    var pml4: Table(PML45) = map;
     var pml4e: *PML45 = &pml4[split.dirptr];
     if (!pml4e.present) return null;
     var pdpt: Table(PDPTE) = pmm.ptrFromPhys(Table(PDPTE), pml4e.get_phys_addr());
