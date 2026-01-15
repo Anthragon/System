@@ -37,12 +37,20 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
     );
     cr4 |= @as(usize, 1 << 9); // OSFXSR
     cr4 |= @as(usize, 1 << 10); // OSXMMEXCPT
+    //cr4 |= @as(usize, 1 << 18); // OSXSAVE
     asm volatile ("mov %[in], %%cr4"
         :
         : [in] "r" (cr4),
     );
 
-    asm volatile ("fninit");
+    //asm volatile (
+    //    \\xor %%ecx, %%ecx
+    //    \\mov $0x3, %%eax
+    //    \\xor %%edx, %%edx
+    //    \\xsetbv
+    //    ::: .{ .rax = true, .rcx = true, .rdx = true });
+
+    //asm volatile ("fninit");
 
     if (check_nx_support()) {
         asm volatile (

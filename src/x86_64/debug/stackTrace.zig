@@ -2,8 +2,7 @@ const std = @import("std");
 const pmm = @import("../mem/pmm.zig");
 
 pub fn dumpStackTrace(frame_addr: usize, writer: anytype) void {
-
-    var frame =  frame_addr;
+    var frame = frame_addr;
 
     writer.print("<===addr===>\n", .{}) catch unreachable;
 
@@ -14,7 +13,7 @@ pub fn dumpStackTrace(frame_addr: usize, writer: anytype) void {
         const last_frame: usize = @as(*usize, @ptrFromInt(frame)).*;
         const return_ptr: usize = @as(*usize, @ptrFromInt(frame + 8)).*;
 
-        if (last_frame == 0 or return_ptr == 0) break;
+        if (last_frame <= 0x4000 or return_ptr <= 0x4000) break;
 
         writer.print("{X}\n", .{return_ptr}) catch unreachable;
 
@@ -22,5 +21,4 @@ pub fn dumpStackTrace(frame_addr: usize, writer: anytype) void {
     }
 
     writer.print("<===addr===/>\n", .{}) catch unreachable;
-
 }
