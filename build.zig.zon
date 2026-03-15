@@ -1,6 +1,7 @@
 .{
     .name = .system,
     .version = "0.0.0",
+    .fingerprint = 0xc94d118bf2a4a765,
 
     .dependencies = .{},
 
