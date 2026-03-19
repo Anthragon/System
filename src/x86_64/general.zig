@@ -4,8 +4,8 @@ const serial = @import("io/serial.zig");
 const gdt = @import("tables/globalDescriptorTable.zig");
 const idt = @import("tables/interruptDescriptorTable.zig");
 const pmm = @import("mem/pmm.zig");
-const pic = @import("hardware/pic.zig");
-const acpi = @import("hardware/acpi/acpi.zig");
+const pic = @import("hardwere/pic.zig");
+const acpi = @import("hardwere/acpi/acpi.zig");
 const ports = @import("io/ports.zig");
 const cpuid = @import("asm/cpuid.zig");
 
