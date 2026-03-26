@@ -20,7 +20,7 @@ pub fn init() !void {
     for (0..table.len()) |i| {
         const t = table.get_ptr(i);
         const sig = t.header.signature;
-        log.debug("{} - rev {} - {s} - checksum {}", .{
+        log.debug("\n{} - rev {} - {s} - checksum {}", .{
             i,
             t.header.revision,
             t.header.signature,
@@ -30,9 +30,8 @@ pub fn init() !void {
         if (std.mem.eql(u8, sig[0..4], "APIC")) {
             decode_madt(t);
         } else if (std.mem.eql(u8, sig[0..4], "FACP")) {
-            // TODO
-            //const fadt: *const acpi_tables.Fadt = @ptrCast(t);
-            //decode_fadt(fadt);
+            const fadt: *const acpi_tables.Fadt = @ptrCast(@alignCast(t));
+            decode_fadt(fadt);
         } else if (std.mem.eql(u8, sig[0..4], "HPET")) {
             // TODO
             //const hpet: *const acpi_tables.Hpet = @ptrCast(t);
@@ -41,22 +40,37 @@ pub fn init() !void {
             // TODO
             //const mcfg: *const acpi_tables.Mcfg = @ptrCast(t);
             //decode_mcfg(mcfg);
+        } else if (std.mem.eql(u8, sig[0..4], "BGRT")) {
+            const bgrt: *const acpi_tables.Bgrt = @ptrCast(@alignCast(t));
+            decode_bgrt(bgrt);
         } else log.debug("(Unknown table {s})", .{sig});
+
+        log.debug("", .{});
     }
+    log.debug("\nEnd of ACPI table", .{});
 }
 
 fn decode_madt(table: *const acpi_tables.Sdt) void {
-    const len = table.header.length - 8;
-    const entries: [*]const u8 = @as([*]const u8, @ptrCast(&table.entries))[8..];
+    const header_size = @sizeOf(acpi_tables.SdtHeader);
+    const madt_header_extra = 8;
+
+    const start = header_size + madt_header_extra;
+    const len = table.header.length - start;
+
+    const entries = @as([*]const u8, @ptrCast(table))[start..];
     var basei: usize = 0;
 
     while (basei < len) {
-        const entry = entries[basei..];
+        if (basei + 2 > len) break;
 
+        const entry = entries[basei..];
         const entry_type = entry[0];
         const entry_size = entry[1];
-        if (entry_size < 2) break;
 
+        if (entry_size < 2 or basei + entry_size > len) {
+            log.debug("Invalid MADT entry (type={}, size={})", .{ entry_type, entry_size });
+            break;
+        }
         switch (entry_type) {
             0 => {
                 const proc_id = entry[2];
@@ -94,16 +108,58 @@ fn decode_madt(table: *const acpi_tables.Sdt) void {
                 log.debug("\t  flags:      0x{x:0>4}", .{flags});
             },
 
-            else => log.debug("Unhandled entry type {}", .{entry_type}),
+            4 => {
+                if (entry_size < 6) break;
+
+                const cpu = entry[2];
+                const flags = std.mem.readInt(u16, entry[3..5], endian);
+                const lint = entry[5];
+
+                const enabled = (flags & 1) != 0;
+                const online_capable = (flags & 2) != 0;
+
+                log.debug("\t4 - Local APIC NMI:", .{});
+                log.debug("\t  cpu:   {}", .{cpu});
+                log.debug("\t  lint:  {}", .{lint});
+                log.debug("\t  flags: 0x{x:0>4}", .{flags});
+                log.debug("\t  |  enabled:    {}", .{enabled});
+                log.debug("\t  |  can enable: {}", .{online_capable});
+            },
+
+            else => log.debug("Unknown MADT entry type {} (size {})", .{ entry_type, entry_size }),
         }
 
         basei += entry_size;
     }
 }
 
-//fn decode_fadt(table: *const acpi_tables.Fadt) void {
-//    _ = table;
-//}
+fn decode_fadt(table: *const acpi_tables.Fadt) void {
+    log.debug("\tflags: 0x{x}", .{table.flags});
+    log.debug("\t|  enabled: {}", .{table.flags & 1 != 0});
+    log.debug("\t|  can enable: {}", .{table.flags & 2 != 0});
+    log.debug("\tsmi command: 0x{x}", .{table.smi_cmd});
+    log.debug("\tsci IRQ: 0x{x}", .{table.sci_int});
+    log.debug("\tprefered profile: {s}", .{switch (table.preferred_pm_profile) {
+        0 => "Unespecified",
+        1 => "Desktop",
+        2 => "Mobile",
+        3 => "Workstation",
+        4 => "Enterprise Server",
+        5 => "SOHO Server",
+        6 => "Appliance PC",
+        7 => "Performance Server",
+        else => "Reserved",
+    }});
+}
 
 //fn decode_hpet(table: *const acpi_tables.Hadt) void {_ = table;}
 //fn decode_mcfg(table: *const acpi_tables.Mcfg) void {_ = table;}
+
+fn decode_bgrt(table: *const acpi_tables.Bgrt) void {
+    log.debug("\tversion ID: {}", .{table.version_id});
+    log.debug("\tstatus:     {}", .{table.status});
+    log.debug("\ttype:       {s}", .{if (table.image_type == 0) "bitmap" else "unknown"});
+    log.debug("\tpointer:    0x{x:0>16}", .{table.image_address});
+    log.debug("\toffset X:   {}", .{table.image_x_offset});
+    log.debug("\toffset Y:   {}", .{table.image_y_offset});
+}
