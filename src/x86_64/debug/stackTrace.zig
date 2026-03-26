@@ -13,7 +13,7 @@ pub fn dumpStackTrace(frame_addr: usize, writer: anytype) void {
         const last_frame: usize = @as(*usize, @ptrFromInt(frame)).*;
         const return_ptr: usize = @as(*usize, @ptrFromInt(frame + 8)).*;
 
-        if (last_frame <= 0x4000 or return_ptr <= 0x4000) break;
+        if (last_frame <= 0x800000 or return_ptr <= 0x800000) break;
 
         writer.print("{X}\n", .{return_ptr}) catch unreachable;
 
