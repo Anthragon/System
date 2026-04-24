@@ -1,12 +1,17 @@
 const std = @import("std");
 const ports = @import("ports.zig");
-const Writer = std.io.Writer;
 
 pub const com_port: [4]u16 = .{ 0x3F8, 0x2F8, 0x3E8, 0x2E8 };
 
-var serial_ports: [2]Writer = .{
-    .{ .buffer = &.{}, .end = 0, .vtable = &serial_writer_vtable },
-    .{ .buffer = &.{}, .end = 0, .vtable = &serial_writer_vtable },
+var COM1_serial_writer: std.io.Writer = .{
+    .buffer = &.{},
+    .end = 0,
+    .vtable = &serial_writer_vtable,
+};
+var COM2_serial_writer: std.io.Writer = .{
+    .buffer = &.{},
+    .end = 0,
+    .vtable = &serial_writer_vtable,
 };
 const serial_writer_vtable: std.io.Writer.VTable = .{ .drain = serial_out };
 
@@ -48,18 +53,24 @@ pub fn init() !void {
     }
 }
 
-pub fn get_writer(port: u8) *std.io.Writer {
-    if (port > serial_ports.len) std.debug.panic("No UART port {}!", .{port});
-    return &serial_ports[port];
+pub fn chardev(dev: u8) *std.io.Writer {
+    return switch (dev) {
+        1 => &COM1_serial_writer,
+        2 => &COM2_serial_writer,
+
+        else => std.debug.panic("No chardev COM{}!", .{dev}),
+    };
 }
 
 fn serial_out(w: *std.io.Writer, data: []const []const u8, splat: usize) !usize {
-    const dev: u8 = brk: {
-        const base = @intFromPtr(&serial_ports[0]);
-        const end = @intFromPtr(&serial_ports[0]) + @sizeOf(Writer) * serial_ports.len;
-        const ptr = @intFromPtr(w);
-        if (ptr < base or ptr >= end) @panic("Invalid writer!");
-        break :brk @intCast((ptr - base) / @sizeOf(Writer));
+    const dev: u8 = b: {
+        const wp = @intFromPtr(w);
+
+        if (wp == @intFromPtr(&COM1_serial_writer)) {
+            break :b 0;
+        } else if (wp == @intFromPtr(&COM2_serial_writer)) {
+            break :b 1;
+        } else @panic("Invalid chardev!");
     };
 
     _ = splat;

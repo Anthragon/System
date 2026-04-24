@@ -1,43 +1,28 @@
 const std = @import("std");
+const Writer = std.io.Writer;
 
-var COM1_serial_writer: std.io.Writer = .{
-    .buffer = &.{},
-    .end = 0,
-    .vtable = &serial_writer_vtable,
+var serial_ports: [2]Writer = .{
+    .{ .buffer = &.{}, .end = 0, .vtable = &serial_writer_vtable },
+    .{ .buffer = &.{}, .end = 0, .vtable = &serial_writer_vtable },
 };
-var COM2_serial_writer: std.io.Writer = .{
-    .buffer = &.{},
-    .end = 0,
-    .vtable = &serial_writer_vtable,
-};
-const serial_writer_vtable: std.io.Writer.VTable = .{ .drain = serial_out };
+const serial_writer_vtable: Writer.VTable = .{ .drain = serial_out };
 
 pub fn init() !void {
-    for (0..4) |i| {
-        _ = i;
-        @panic("Not implemented!");
-        //uart_putchar(@truncate(i), '\n');
-    }
+    uart_putchar(0, "UART initialised");
 }
 
-pub fn chardev(dev: u8) *std.io.Writer {
-    return switch (dev) {
-        1 => &COM1_serial_writer,
-        2 => &COM2_serial_writer,
-
-        else => std.debug.panic("No chardev COM{}!", .{dev}),
-    };
+pub fn get_writer(port: u8) *Writer {
+    if (port > serial_ports.len) std.debug.panic("No UART port {}!", .{port});
+    return &serial_ports[port];
 }
 
-fn serial_out(w: *std.io.Writer, data: []const []const u8, splat: usize) !usize {
-    const dev: u8 = b: {
-        const wp = @intFromPtr(w);
-
-        if (wp == @intFromPtr(&COM1_serial_writer)) {
-            break :b 0;
-        } else if (wp == @intFromPtr(&COM2_serial_writer)) {
-            break :b 1;
-        } else @panic("Invalid chardev!");
+fn serial_out(w: *Writer, data: []const []const u8, splat: usize) !usize {
+    const dev: u8 = brk: {
+        const base = @intFromPtr(&serial_ports[0]);
+        const end = @intFromPtr(&serial_ports[0]) + @sizeOf(Writer) * serial_ports.len;
+        const ptr = @intFromPtr(w);
+        if (ptr < base or ptr >= end) @panic("Invalid writer!");
+        break :brk @intCast((ptr - base) / @sizeOf(Writer));
     };
 
     _ = splat;
@@ -51,17 +36,30 @@ fn serial_out(w: *std.io.Writer, data: []const []const u8, splat: usize) !usize 
     return count;
 }
 
-inline fn is_buffer_empty(dev: u8) bool {
-    _ = dev;
-    @panic("Not implemented");
+inline fn is_buffer_empty(dev: u9) bool {
+    const base = uart_base(dev);
+    return (uartfr(base).* & (1 << 5)) == 0;
 }
-pub inline fn uart_putchar(dev: u8, char: u8) void {
-    _ = dev;
-    _ = char;
-    @panic("Not implemented");
+pub inline fn uart_putchar(dev: u9, char: u8) void {
+    const base = uart_base(dev);
+    while ((uartfr(base).* & (1 << 5)) != 0) {}
+    uartdr(base).* = char;
 }
-pub inline fn uart_puts(dev: u8, str: []const u8) void {
-    _ = dev;
-    _ = str;
-    @panic("Not implemented");
+pub inline fn uart_puts(dev: u9, str: []const u8) void {
+    for (str) |c| uart_putchar(dev, c);
+}
+
+inline fn uart_base(dev: u9) usize {
+    return switch (dev) {
+        0 => 0x09000000,
+        1 => 0x09010000,
+        else => @panic("UART inválida"),
+    };
+}
+inline fn uartdr(base: usize) *volatile u32 {
+    return @ptrFromInt(base + 0x00);
+}
+
+inline fn uartfr(base: usize) *volatile u32 {
+    return @ptrFromInt(base + 0x18);
 }

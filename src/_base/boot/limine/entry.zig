@@ -13,9 +13,6 @@ pub export var hhdm_request: limine.HhdmRequest = .{};
 pub export var rsdp_request: limine.RsdpRequest = .{};
 pub export var kfile_request: limine.KernelFileRequest = .{};
 
-extern var boot_info: boot.BootInfo;
-extern fn main() callconv(.c) noreturn;
-
 pub export fn __boot_entry__() callconv(.c) noreturn {
 
     // Tiny subroutine to make sure some main
@@ -106,7 +103,7 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
         }
     };
 
-    boot_info = .{
+    const boot_info: boot.BootInfo = .{
         .kernel_base_physical = addr.physical_base,
         .kernel_base_virtual = addr.virtual_base,
         .kernel_stack_pointer_base = stbp,
@@ -128,7 +125,8 @@ pub export fn __boot_entry__() callconv(.c) noreturn {
         .boot_device = boot_device,
     };
 
-    main();
+    const main = @extern(*const fn (boot.BootInfo) callconv(.c) noreturn, .{ .name = "main" });
+    main(boot_info);
     unreachable;
 }
 
